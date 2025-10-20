@@ -1,7 +1,8 @@
 from __future__ import annotations
 import os, json, requests
 
-APP_KEY = os.getenv("DROPBOX_APP_KEY")
+ACCESS_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN")  # uso diretto token breve se presente
+APP_KEY = os.getenv("DROPBOX_APP_KEY")            # opzionali (fallback)
 APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
 REFRESH_TOKEN = os.getenv("DROPBOX_REFRESH_TOKEN")
 BASE_PATH = os.getenv("DROPBOX_BASE_PATH", "/Public/midocean").rstrip("/")
@@ -13,8 +14,10 @@ class DropboxAuthError(Exception): pass
 class DropboxUploadError(Exception): pass
 
 def _get_access_token() -> str:
+    if ACCESS_TOKEN:
+        return ACCESS_TOKEN
     if not (APP_KEY and APP_SECRET and REFRESH_TOKEN):
-        raise DropboxAuthError("Missing Dropbox OAuth envs")
+        raise DropboxAuthError("Missing DROPBOX_ACCESS_TOKEN or OAuth envs")
     resp = requests.post(
         TOKEN_URL,
         data={"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN},
@@ -37,8 +40,9 @@ def upload_file(local_path: str, dropbox_filename: str) -> str:
                 "Dropbox-API-Arg": json.dumps({"path": dest_path, "mode": {".tag": "overwrite"}}),
             },
             data=f,
-            timeout=120,
+            timeout=300,
         )
         if r.status_code != 200:
             raise DropboxUploadError(f"Upload failed: {r.status_code}: {r.text}")
     return dest_path
+
