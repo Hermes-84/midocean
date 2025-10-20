@@ -24,7 +24,7 @@ def compute_qty(row) -> int:
 
 def main():
     client = MidoceanClient()
-    data = client.get("gateway/gateway/stock/2.0", accept="text/json")
+    data = client.get("gateway/stock/2.0", accept="application/json")
     stock_items = data.get("stock", [])
     if not isinstance(stock_items, list):
         raise RuntimeError("Unexpected stock payload")
