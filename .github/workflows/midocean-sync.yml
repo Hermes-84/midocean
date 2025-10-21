@@ -58,12 +58,17 @@ jobs:
         run: python scripts/product_general_to_csv.py
 
       - name: Enrich generale (weights/price/print)
-        if: github.event.schedule == '0 3 * * 1' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * 1'
         env:
           MIDOCEAN_API_KEY: ${{ secrets.MIDOCEAN_API_KEY }}
           MIDOCEAN_BASE_URL: ${{ vars.MIDOCEAN_BASE_URL }}
           MIDOCEAN_LANGUAGE: ${{ vars.MIDOCEAN_LANGUAGE }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_BASE_PATH: ${{ vars.DROPBOX_BASE_PATH }}
         run: python scripts/augment_general.py
+
 
 
       - name: Print (weekly)
