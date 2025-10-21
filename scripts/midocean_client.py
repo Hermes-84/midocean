@@ -19,13 +19,10 @@ class MidoceanClient:
         if not self.api_key:
             raise ValueError("Missing MIDOCEAN_API_KEY")
 
-    def _auth_headers(self) -> list[dict[str, str]]:
-        return [
-            {"x-Gateway-APIKey": self.api_key},
-            {"X-API-Key": self.api_key},
-            {"x-api-key": self.api_key},
-            {"apikey": self.api_key},
-        ]
+   def _auth_headers(self) -> list[dict[str, str]]:
+    return [
+        {"x-Gateway-APIKey": self.api_key},  # header corretto
+    ]
 
     @retry(
         reraise=True,
