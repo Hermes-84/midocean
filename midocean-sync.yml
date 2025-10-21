@@ -3,7 +3,7 @@ name: Midocean sync
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '7 */6 * * *'   # stock ogni 6 ore
+    - cron: '7 */4 * * *'   # stock ogni 4 ore
     - cron: '0 3 * * 1'     # generale lun 04:00 Europe/Rome (~03:00 UTC)
     - cron: '15 3 * * 1'    # print lun 04:15 Europe/Rome (~03:15 UTC)
 
