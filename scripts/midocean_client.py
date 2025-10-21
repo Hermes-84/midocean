@@ -1,55 +1,70 @@
 from __future__ import annotations
 import os
-from typing import Dict, Any
+from typing import Any, Dict, Optional, List
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
 from requests import Response
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
 
 BASE_URL = os.getenv("MIDOCEAN_BASE_URL", "https://api.midocean.com").rstrip("/")
 API_KEY = os.getenv("MIDOCEAN_API_KEY", "").strip()
-TIMEOUT = float(os.getenv("HTTP_TIMEOUT", 60))
+TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
 
 class HttpError(Exception):
     pass
 
 class MidoceanClient:
-    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None) -> None:
         self.base_url = (base_url or BASE_URL).rstrip("/")
         self.api_key = (api_key or API_KEY).strip()
         if not self.api_key:
             raise ValueError("Missing MIDOCEAN_API_KEY")
 
-   def _auth_headers(self) -> list[dict[str, str]]:
-    return [
-        {"x-Gateway-APIKey": self.api_key},  # header corretto
-    ]
+    def _auth_headers(self) -> List[Dict[str, str]]:
+        # Header ufficiale per le API midocean
+        return [
+            {"x-Gateway-APIKey": self.api_key},
+            {"X-Gateway-APIKey": self.api_key},  # fallback case-variant
+        ]
 
     @retry(
         reraise=True,
         stop=stop_after_attempt(5),
-        wait=wait_exponential_jitter(initial=1, max=30),
-        retry=retry_if_exception_type((HttpError, requests.RequestException)),
+        wait=wait_exponential_jitter(initial=1, max=20),
+        retry=retry_if_exception_type((requests.RequestException, HttpError)),
     )
-    def get(self, path: str, accept: str = "text/json", params: Dict[str, Any] | None = None) -> dict:
+    def get(self, path: str, accept: str = "text/json", params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        last_exc: Exception | None = None
-        for auth_hdr in self._auth_headers():
+        last_err: Optional[Exception] = None
+
+        for auth in self._auth_headers():
             headers = {"Accept": accept}
-            headers.update(auth_hdr)
+            headers.update(auth)
             try:
                 resp: Response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
             except requests.RequestException as e:
-                last_exc = e
+                last_err = e
                 continue
-            if resp.status_code == 200:
-                if accept == "text/json":
+
+            status = resp.status_code
+            if status == 200:
+                # prova JSON, altrimenti restituisci testo grezzo
+                try:
                     return resp.json()
-                return {"raw": resp.text}
-            elif resp.status_code in (401, 403):
-                last_exc = HttpError(f"Auth failed with header {list(auth_hdr.keys())[0]} status={resp.status_code}")
+                except ValueError:
+                    return {"raw": resp.text}
+
+            if status in (401, 403):
+                last_err = HttpError(f"Auth failed with {list(auth.keys())[0]} (status={status})")
+                # prova header alternativo
                 continue
-            elif resp.status_code in (429, 500, 502, 503, 504):
-                raise HttpError(f"Server busy {resp.status_code}: {resp.text[:200]}")
-            else:
-                raise HttpError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-        raise last_exc or HttpError("Authentication failed with all header variants")
+
+            if status in (429, 500, 502, 503, 504):
+                # errori transitori → retry
+                raise HttpError(f"Transient HTTP {status}: {resp.text[:200]}")
+
+            # errori non transitori
+            raise HttpError(f"HTTP {status}: {resp.text[:200]}")
+
+        # esaurite le varianti di header
+        raise last_err or HttpError("Authentication failed with all header variants")
+
