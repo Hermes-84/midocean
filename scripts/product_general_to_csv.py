@@ -2,8 +2,7 @@ from __future__ import annotations
 import os
 import pandas as pd
 from scripts.midocean_client import MidoceanClient
-from scripts.utils import now_local, write_csv, to_it_decimal, to_upper, log, SUPPLIER
-from scripts.dropbox_uploader import upload_file
+from scripts.utils import now_local, time_hms, write_csv, to_it_decimal, to_upper, log, SUPPLIER
 
 OUT = os.getenv("OUT_DIR", "out")
 FILENAME = "generale.csv"
@@ -44,13 +43,22 @@ COLUMNS = [
  "products__product__manipulation","Printing technique","Max colors","Print position document","max_print_area","measuresprintrange","test","translation__of__products__product__color_description"
 ]
 
-def first_asset(assets: list, subtype: str) -> str:
-    for a in (assets or []):
-        if a.get("subtype") == subtype:
+def _pick(d: dict, *keys, default: str = "") -> str:
+    for k in keys:
+        if k in d and d[k] not in (None, "", "null"):
+            return str(d[k])
+    return default
+
+def _assets_list(master: dict, variant: dict) -> list[dict]:
+    return (variant.get("digital_assets") or master.get("digital_assets") or [])
+
+def _first_asset_by_subtype(assets: list[dict], subtype: str) -> str:
+    for a in assets:
+        if str(a.get("subtype") or "").lower() == subtype.lower():
             return a.get("url") or ""
     return ""
 
-def pad_assets(assets: list, n: int = 9):
+def _pad_assets(assets: list[dict], n: int = 9):
     urls, types, subs = [], [], []
     for a in (assets or [])[:n]:
         urls.append(a.get("url", ""))
@@ -63,72 +71,106 @@ def pad_assets(assets: list, n: int = 9):
 def main():
     client = MidoceanClient()
     lang = os.getenv("MIDOCEAN_LANGUAGE", "it")
-    data = client.get("gateway/products/2.0", params={"language": lang})
-    products = data.get("products") or data.get("data") or []
-    if not products:
-        products = data if isinstance(data, list) else []
+    data = client.get("gateway/products/2.0", accept="text/json", params={"language": lang})
+
+    # data può essere dict o list → normalizza
+    if isinstance(data, dict):
+        products = data.get("products") or data.get("data") or []
+    elif isinstance(data, list):
+        products = data
+    else:
+        products = []
+
     rows = []
     rid = 0
     for master in products:
-        master_code = master.get("master_code")
-        master_id = master.get("master_id")
-        for v in master.get("variants", []):
+        master_code = _pick(master, "master_code", "product_base_number", "product_code", "product_number")
+        master_id   = _pick(master, "master_id", "product_print_id")
+        product_name = _pick(master, "product_name", "name")
+        short_desc   = _pick(master, "short_description", "shortDescription")
+        long_desc    = _pick(master, "long_description", "longDescription")
+        dimensions   = _pick(master, "dimensions", "dimension")
+        material     = _pick(master, "material", "material_group", "material_type")
+        commodity    = _pick(master, "commodity_code", "hs_code")
+        origin       = _pick(master, "country_of_origin", "origin_country")
+        cat_code     = _pick(master, "category_code", "category")
+        carton_len   = _pick(master, "carton_length", "outer_carton_length")
+        carton_wid   = _pick(master, "carton_width", "outer_carton_width")
+        carton_hei   = _pick(master, "carton_height", "outer_carton_height")
+        carton_unit  = _pick(master, "carton_size_unit", "outer_carton_size_unit")
+        carton_wgt   = _pick(master, "gross_weight", "outer_carton_weight")
+        carton_wgt_u = _pick(master, "gross_weight_unit", "outer_carton_weight_unit")
+        carton_vol   = _pick(master, "volume", "outer_carton_volume")
+        carton_vol_u = _pick(master, "volume_unit", "outer_carton_volume_unit")
+        inner_qty    = _pick(master, "inner_carton_quantity", "inner_ctn_qty")
+        outer_qty    = _pick(master, "outer_carton_quantity", "outer_ctn_qty")
+
+        # categorie (preferisci quelle della variante, se presenti)
+        variants = master.get("variants") or master.get("items") or []
+        if not variants:
+            # fallback: crea una pseudo-variante per non perdere il master
+            variants = [dict(sku=master_code)]
+
+        for v in variants:
             rid += 1
-            sku = v.get("sku")
-            assets_master = master.get("digital_assets", [])
-            assets_variant = v.get("digital_assets", [])
-            assets = assets_variant or assets_master
-            url_front = first_asset(assets, "item_picture_front")
-            url_thumb = url_front.replace("700X700", "240X240") if url_front else ""
-            urls, types, subs = pad_assets(assets, 9)
-            cat_code = master.get("category_code")
-            cl1 = v.get("category_level1") or master.get("category_level1")
-            cl2 = v.get("category_level2") or master.get("category_level2")
-            cl3 = v.get("category_level3") or master.get("category_level3")
-            cl4 = v.get("category_level4") or master.get("category_level4")
+            sku = _pick(v, "sku", "product_number", "product_code", default=master_code)
+            color_code = _pick(v, "color_code", "colour_code", "item_color_number")
+            color_desc = _pick(v, "color_description", "colour_description")
+            size_text  = _pick(v, "size_textile", "size")
+            gender     = _pick(v, "gender")
+            plcstatus  = _pick(v, "plc_status_description", "plcstatus")
+            cl1 = _pick(v, "category_level1", "category_level_1", default=_pick(master, "category_level1","category_level_1"))
+            cl2 = _pick(v, "category_level2", "category_level_2", default=_pick(master, "category_level2","category_level_2"))
+            cl3 = _pick(v, "category_level3", "category_level_3", default=_pick(master, "category_level3","category_level_3"))
+            cl4 = _pick(v, "category_level4", "category_level_4", default=_pick(master, "category_level4","category_level_4"))
+
+            assets = _assets_list(master, v)
+            front_url = _first_asset_by_subtype(assets, "item_picture_front") or (assets[0]["url"] if assets else "")
+            thumb_url = front_url.replace("700X700", "240X240") if "700X700" in front_url else front_url
+            urls, types, subs = _pad_assets(assets, 9)
 
             row = {
                 "midocean_product_info_id": rid,
-                "supplier": os.getenv("SUPPLIER_NAME", "Mid Ocean Brands"),
+                "supplier": SUPPLIER,
                 "date": now_local().strftime("%Y%m%d"),
-                "time": now_local().strftime("%H:%M:%S"),
+                "time": time_hms(),
                 "language": lang.upper(),
                 "products__product__product_number": sku,
                 "products__product__product_base_number": master_code,
-                "products__product__product_id": v.get("variant_id"),
+                "products__product__product_id": _pick(v, "variant_id", "id"),
                 "products__product__product_print_id": master_id,
-                "products__product__product_name": master.get("product_name"),
-                "products__product__plcstatus": v.get("plc_status_description"),
-                "products__product__short_description": master.get("short_description"),
-                "products__product__long_description": master.get("long_description"),
-                "products__product__dimensions": master.get("dimensions"),
-                "products__product__net_weight": "",  # to_it_decimal(master.get("net_weight")) if present
-                "products__product__gross_weight": "", # to_it_decimal(master.get("gross_weight"))
-                "products__product__gross_weight_unit": "", # to_upper(master.get("gross_weight_unit"))
-                "products__product__color_code": v.get("color_code"),
-                "products__product__color_description": v.get("color_description"),
-                "products__product__size": v.get("size_textile") or v.get("size") or "",
-                "products__product__gender": v.get("gender") or "",
-                "products__product__material_type": master.get("material") or master.get("material_group") or "",
+                "products__product__product_name": product_name,
+                "products__product__plcstatus": plcstatus,
+                "products__product__short_description": short_desc,
+                "products__product__long_description": long_desc,
+                "products__product__dimensions": dimensions,
+                "products__product__net_weight": "",  # non affidabile in API, lo lasciamo vuoto
+                "products__product__gross_weight": "", # idem
+                "products__product__gross_weight_unit": "",
+                "products__product__color_code": color_code,
+                "products__product__color_description": color_desc,
+                "products__product__size": size_text,
+                "products__product__gender": gender,
+                "products__product__material_type": material,
                 "products__product__category_code": cat_code,
                 "products__product__category_level_1": cl1,
                 "products__product__category_level_2": cl2,
                 "products__product__category_level_3": cl3,
                 "products__product__category_level_4": cl4,
-                "products__product__image_url": url_front,
-                "products__product__thumbnail_url": url_thumb,
-                "products__product__commodity_code": master.get("commodity_code"),
-                "products__product__country_of_origin": master.get("country_of_origin"),
-                "products__product__packaging_carton__length": "",  # to_it_decimal(master.get("carton_length"))
-                "products__product__packaging_carton__width": "",   # to_it_decimal(master.get("carton_width"))
-                "products__product__packaging_carton__height": "",  # to_it_decimal(master.get("carton_height"))
-                "products__product__packaging_carton__size_unit": "", # to_upper(master.get("carton_length_unit"))
-                "products__product__packaging_carton__weight": "",    # to_it_decimal(master.get("gross_weight"))
-                "products__product__packaging_carton__weight_unit": "", # to_upper(master.get("gross_weight_unit"))
-                "products__product__packaging_carton__volume": "",     # to_it_decimal(master.get("volume"))
-                "products__product__packaging_carton__volume_unit": "",# to_upper(master.get("volume_unit"))
-                "products__product__packaging_carton__inner_carton_quantity": master.get("inner_carton_quantity"),
-                "products__product__packaging_carton__carton_quantity": master.get("outer_carton_quantity"),
+                "products__product__image_url": front_url,
+                "products__product__thumbnail_url": thumb_url,
+                "products__product__commodity_code": commodity,
+                "products__product__country_of_origin": origin,
+                "products__product__packaging_carton__length": carton_len,
+                "products__product__packaging_carton__width": carton_wid,
+                "products__product__packaging_carton__height": carton_hei,
+                "products__product__packaging_carton__size_unit": to_upper(carton_unit),
+                "products__product__packaging_carton__weight": carton_wgt,
+                "products__product__packaging_carton__weight_unit": to_upper(carton_wgt_u),
+                "products__product__packaging_carton__volume": carton_vol,
+                "products__product__packaging_carton__volume_unit": to_upper(carton_vol_u),
+                "products__product__packaging_carton__inner_carton_quantity": inner_qty,
+                "products__product__packaging_carton__carton_quantity": outer_qty,
                 "products__product__digital_assets": "",
                 "products__product__digital_assets__digital_asset__url": urls[0],
                 "products__product__digital_assets__digital_asset__type": types[0],
@@ -163,7 +205,7 @@ def main():
                 "price": "",
                 "products__product__quantity": "",
                 "products__product__product_print_id_2": master_id,
-                "products__product__item_color_number": v.get("color_code"),
+                "products__product__item_color_number": color_code,
                 "products__product__manipulation": "",
                 "Printing technique": "",
                 "Max colors": "",
@@ -171,13 +213,14 @@ def main():
                 "max_print_area": "",
                 "measuresprintrange": "",
                 "test": "",
-                "translation__of__products__product__color_description": v.get("color_description"),
+                "translation__of__products__product__color_description": color_desc,
             }
             rows.append(row)
 
     df = pd.DataFrame(rows, columns=COLUMNS)
     out_path = os.path.join(OUT, FILENAME)
     write_csv(df, out_path)
+    from scripts.dropbox_uploader import upload_file
     dest = upload_file(out_path, FILENAME)
     log.info("Uploaded to Dropbox → %s", dest)
 
