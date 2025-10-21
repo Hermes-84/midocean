@@ -25,19 +25,25 @@ def _safe_i(x) -> int:
         return 0
 
 def _areas_from_positions(positions: list) -> tuple[list[int], list[str]]:
-    mm2 = []
-    cm2 = []
+    """Ritorna (aree_mm2, aree_cm2_string) da una lista di posizioni di stampa.
+    Ignora voci non numeriche e deduplica. Nessuna stringa vuota.
+    """
+    mm2: list[int] = []
     for p in positions or []:
-        h = _safe_i(p.get("max_print_size_height"))
-        w = _safe_i(p.get("max_print_size_width"))
-        if h and w:
-            a = h * w
-            mm2.append(a)
-            cm2.append(f"{a/100:.0f}cm2")
-    mm2.sort(reverse=True)
-    # ordina cm2 in base al numero (stringa tipo "299cm2")
-    cm2.sort(key=lambda s: int(s[:-4]), reverse=True) if cm2 else None
+        # chiavi possibili per altezza/larghezza
+        h = _safe_i(p.get("max_print_size_height") or p.get("height") or p.get("print_height"))
+        w = _safe_i(p.get("max_print_size_width")  or p.get("width")  or p.get("print_width"))
+        if h > 0 and w > 0:
+            mm2.append(h * w)
+
+    # dedup + sort desc
+    mm2 = sorted(set(mm2), reverse=True)
+
+    # converti in stringhe "NNNcm2" (mm2/100 arrotondato all'intero più vicino)
+    cm2 = [f"{int(round(a / 100.0))}cm2" for a in mm2]
+
     return mm2, cm2
+
 
 def main():
     if not os.path.exists(INFILE):
