@@ -228,8 +228,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     out_path = os.path.join(OUT, FILENAME)
     write_csv(df, out_path)
-    dest = upload_file(out_path, FILENAME)
-    log.info("Uploaded to Dropbox → %s", dest)
+    log.info("Wrote base general → %s (no upload here; augment will upload)", out_path)
 
 if __name__ == "__main__":
     main()
