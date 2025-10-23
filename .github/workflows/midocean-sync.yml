@@ -9,7 +9,7 @@ on:
 
 jobs:
   stock:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '7 */6 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '7 */4 * * *'
     runs-on: ubuntu-latest
     env:
       TZ: Europe/Rome
