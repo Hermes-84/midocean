@@ -12,6 +12,7 @@ OUTFILE = INFILE  # sovrascrive lo stesso file
 # ---------- helpers -------------------------------------------------------------
 
 def _eu(val):
+    """float -> stringa con virgola come separatore EU."""
     if val in (None, ""): return ""
     try:
         f = float(str(val).replace(",", "."))
@@ -21,7 +22,7 @@ def _eu(val):
         return str(val)
 
 def _eu_clean_numeric(val):
-    """Es. '303 KG' -> '303' (eu-decimal)."""
+    """Es. '303 KG' -> '303' con formattazione EU."""
     if val in (None, ""): return ""
     s = str(val).strip()
     s = re.sub(r"[^0-9,.\-]", "", s)
@@ -135,7 +136,7 @@ def main():
             "cm2": ",".join(cm2),
         }
 
-    # === PRODUCTS (pesi + EAN/GTIN + pms/green/polybag) =========================
+    # === PRODUCTS (pesi + GTIN/EAN + PMS/GREEN/POLYBAG) =========================
     prod_payload = client.get("gateway/products/2.0", accept="text/json", params={"language": LANG})
     products_list = []
     if isinstance(prod_payload, dict):
@@ -144,8 +145,8 @@ def main():
     elif isinstance(prod_payload, list):
         products_list = prod_payload
 
-    sku_to_weights = {}
-    master_to_weights = {}
+    sku_to_weights = {}         # sku -> (net, gross, unit)
+    master_to_weights = {}      # master_id -> (net, gross, unit)
     sku_to_ean = {}
     sku_to_gtin = {}
     sku_to_pms = {}
@@ -154,16 +155,21 @@ def main():
 
     for m in products_list:
         mid = m.get("master_id") or ""
+        # pesi a livello master (outer carton pesi NON qui)
         nw = m.get("net_weight")
         gw = m.get("gross_weight")
         gwu = m.get("gross_weight_unit") or "KG"
         if (nw or gw) and mid:
             master_to_weights[mid] = (nw, gw, gwu)
 
-        # fallback a livello master per meta-dati aggiuntivi
+        # meta master per fallback
+        master_pack = m.get("packaging") or {}
         master_pms     = m.get("pms_color") or m.get("pms") or m.get("pantone") or ""
         master_green   = m.get("green") or m.get("is_green") or m.get("sustainable") or ""
-        master_polybag = m.get("polybag") or m.get("is_polybag") or m.get("packed_in_polybag") or ""
+        master_polybag = (
+            m.get("polybag") or m.get("is_polybag") or m.get("packed_in_polybag")
+            or master_pack.get("polybag") or ""
+        )
 
         for var in (m.get("variants") or []):
             sku = var.get("sku") or ""
@@ -184,9 +190,13 @@ def main():
             if gtin: sku_to_gtin[sku] = str(gtin)
 
             # PMS / GREEN / POLYBAG (variante > master)
+            pack = var.get("packaging") or {}
             pms     = var.get("pms_color") or var.get("pms") or var.get("pantone") or master_pms
             green   = var.get("green") or var.get("is_green") or var.get("sustainable") or master_green
-            polybag = var.get("polybag") or var.get("is_polybag") or var.get("packed_in_polybag") or master_polybag
+            polybag = (
+                var.get("polybag") or var.get("is_polybag") or var.get("packed_in_polybag")
+                or pack.get("polybag") or master_polybag
+            )
             if pms   : sku_to_pms[sku]     = str(pms)
             if green : sku_to_green[sku]   = str(green)
             if polybag: sku_to_polybag[sku]= str(polybag)
@@ -195,10 +205,17 @@ def main():
     col_mid  = "products__product__product_print_id_2"
     col_mno  = "products__product__product_base_number"
     col_sku  = "products__product__product_number"
-    cw_col   = "products__product__packaging_carton__weight"
+    cl_col   = "products__product__packaging_carton__length"
+    cw_col   = "products__product__packaging_carton__width"
+    ch_col   = "products__product__packaging_carton__height"
+    csize_u  = "products__product__packaging_carton__size_unit"
+    cwei_col = "products__product__packaging_carton__weight"
+    cwei_u   = "products__product__packaging_carton__weight_unit"
+    cvol_col = "products__product__packaging_carton__volume"
+    cvol_u   = "products__product__packaging_carton__volume_unit"
     cq_col   = "products__product__packaging_carton__carton_quantity"
 
-    # stampa / template / aree
+    # *** stampa / template / aree
     df["products__product__manipulation"] = df.apply(
         lambda r: agg.get(r.get(col_mid) or r.get(col_mno),{}).get("manipulation",""), axis=1)
     df["Printing technique"] = df.apply(
@@ -212,7 +229,7 @@ def main():
     df["max_print_area"] = df.apply(
         lambda r: agg.get(r.get(col_mid) or r.get(col_mno),{}).get("cm2",""), axis=1)
 
-    # nuove colonne calcolate
+    # *** nuove colonne
     df["max_print_area_rounded"] = df["max_print_area"].map(_bucket_cm2_list)
     df["products__product__manipulation_man"] = df["products__product__manipulation"].map(
         lambda s: (s.strip() + " man") if str(s).strip() else ""
@@ -226,7 +243,7 @@ def main():
     df["green"]     = df[col_sku].map(lambda s: sku_to_green.get(str(s), ""))
     df["polybag"]   = df[col_sku].map(lambda s: sku_to_polybag.get(str(s), ""))
 
-    # pesi per variante e fallback
+    # *** pesi net/gross per variante (formato EU)
     def _fill_weights(row):
         sku = row.get(col_sku,"")
         mid = row.get(col_mid,"")
@@ -235,7 +252,6 @@ def main():
             nw, gw, gwu = sku_to_weights[sku]
         elif mid in master_to_weights:
             nw, gw, gwu = master_to_weights[mid]
-        # forza EU per net/gross
         row["products__product__net_weight"]   = _eu(nw) if nw else ""
         row["products__product__gross_weight"] = _eu(gw) if gw else ""
         row["products__product__gross_weight_unit"] = gwu if (gw or nw) else ""
@@ -243,50 +259,57 @@ def main():
 
     df = df.apply(_fill_weights, axis=1)
 
-    # decimali UE anche per carton cols
-    carton_cols_eu = [
-        "products__product__packaging_carton__length",
-        "products__product__packaging_carton__width",
-        "products__product__packaging_carton__height",
-        "products__product__packaging_carton__weight",
-        "products__product__packaging_carton__volume",
-    ]
-    for c in carton_cols_eu:
+    # *** decimali EU anche per carton raw cols
+    for c in [cl_col, cw_col, ch_col, cwei_col, cvol_col]:
         if c in df.columns:
             df[c] = df[c].map(_eu_clean_numeric)
 
-    # --- CORREZIONE PACKAGING CARTON WEIGHT (se era per pezzo) ------------------
+    # *** calcolo volume da dimensioni, unità M/M3
+    def _fill_carton_volume_and_units(row):
+        L = _to_float(row.get(cl_col, ""))
+        W = _to_float(row.get(cw_col, ""))
+        H = _to_float(row.get(ch_col, ""))
+        if L and W and H:
+            vol = L * W * H  # m3 se le misure sono in metri (specifica midocean)
+            row[cvol_col] = _eu(vol)
+            row[cvol_u]   = "M3"
+            # imposta unità dimensionale a "M"
+            row[csize_u] = "M"
+        return row
+
+    df = df.apply(_fill_carton_volume_and_units, axis=1)
+
+    # *** correzione carton weight: usa quello API se presente; altrimenti fallback gw_per_item * carton_qty
     def _fix_carton_weight(row):
-        cw_s = row.get(cw_col, "")
-        cq_s = row.get(cq_col, "")
-        cw = _to_float(cw_s) if cw_s != "" else None
+        cw_val = _to_float(row.get(cwei_col, ""))  # NB: cwei_col è il valore, cwei_u è l'unità
+        # (attenzione: sopra abbiamo mappato _eu_clean_numeric su cwei_col)
+        cq = None
         try:
-            cq = int(float(str(cq_s).replace(",", "."))) if cq_s not in ("", None) else None
+            cq = int(float(str(row.get(cq_col, "")).replace(",", "."))) if row.get(cq_col, "") not in ("", None) else None
         except:
             cq = None
 
-        # prendi gross weight per pezzo preferendo dizionario (più affidabile)
-        sku = row.get(col_sku,"")
-        mid = row.get(col_mid,"")
+        if cw_val and cw_val > 0:
+            # Mantieni il peso cartone fornito dall'API
+            row[cwei_u] = "KG" if not row.get(cwei_u) else row[cwei_u]
+            return row
+
+        # Fallback → gross_weight_per_item * carton_quantity
+        sku = row.get(col_sku, "")
+        mid = row.get(col_mid, "")
         gw = None
         if sku in sku_to_weights:
             gw = _to_float(sku_to_weights[sku][1])
         elif mid in master_to_weights:
             gw = _to_float(master_to_weights[mid][1])
-        if gw is None:
-            gw = _to_float(row.get("products__product__gross_weight",""))
-
         if gw and cq:
-            computed_cw = gw * cq  # kg
-            # Se cartone mancante o evidentemente troppo piccolo/grande, sostituisci
-            if (cw is None) or (cw == 0) or (cw < computed_cw * 0.2) or (cw > computed_cw * 5):
-                row[cw_col] = _eu(computed_cw)
-                row["products__product__packaging_carton__weight_unit"] = "KG"
+            row[cwei_col] = _eu(gw * cq)
+            row[cwei_u]   = "KG"
         return row
 
     df = df.apply(_fix_carton_weight, axis=1)
 
-    # reorder “gentile” (vicinanze utili)
+    # --- reorder “gentile” (vicinanze utili)
     cols = list(df.columns)
     for pair in [
         ("products__product__product_number","products__product__ean"),
@@ -294,24 +317,32 @@ def main():
         ("products__product__color_description","pms_color"),
         ("products__product__manipulation","products__product__manipulation_man"),
         ("max_print_area","max_print_area_rounded"),
+        (cvol_col, cvol_u),
     ]:
         left,right = pair
         if right in cols and left in cols:
             cols.insert(cols.index(left)+1, cols.pop(cols.index(right)))
+    # assicura size_unit vicino alle dimensioni
+    try:
+        i = cols.index(ch_col)
+        if csize_u in cols:
+            cols.insert(i+1, cols.pop(cols.index(csize_u)))
+    except ValueError:
+        pass
+
     df = df[cols]
 
     # log di controllo
     try:
         sample = df.iloc[0]
         log.info(
-            "SAMPLE: ean=%s gtin=%s pms=%s green=%s polybag=%s carton_w=%s qty=%s",
-            sample.get("products__product__ean",""),
+            "SAMPLE: gtin=%s polybag=%s carton(LxWxH=%s×%s×%s %s) vol=%s %s weight=%s %s",
             sample.get("gtin",""),
-            sample.get("pms_color",""),
-            sample.get("green",""),
             sample.get("polybag",""),
-            sample.get("products__product__packaging_carton__weight",""),
-            sample.get("products__product__packaging_carton__carton_quantity",""),
+            sample.get(cl_col,""), sample.get(cw_col,""), sample.get(ch_col,""),
+            sample.get(csize_u,""),
+            sample.get(cvol_col,""), sample.get(cvol_u,""),
+            sample.get(cwei_col,""), sample.get(cwei_u,""),
         )
     except Exception as e:
         log.info("SAMPLE unavailable: %s", e)
