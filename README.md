@@ -1,6 +1,6 @@
 # Midocean → CSV → Dropbox
 
-NB ogni paio di mesi modifico questo file per non far "addormentare" il repo di github
+NB ogni paio di mesi modifico questo file per non far "addormentare" il repo di  github
 
 - **stock.csv**: aggiornato ogni 6 ore
 - **generale.csv**: aggiornato ogni settimana (lun 04:00 Europe/Rome)
