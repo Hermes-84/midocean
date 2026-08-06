@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Iterable
@@ -40,6 +41,10 @@ def normalized_stem(key: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch == "_")
 
 
+def normalized_segment(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
 def s3_client():
     access_key = os.environ["TOPPOINT_AWS_ACCESS_KEY_ID"]
     secret_key = os.environ["TOPPOINT_AWS_SECRET_ACCESS_KEY"]
@@ -49,36 +54,87 @@ def s3_client():
         aws_secret_access_key=secret_key,
         region_name=S3_REGION,
         endpoint_url=S3_ENDPOINT,
-        config=Config(retries={"max_attempts": 5, "mode": "standard"}),
+        config=Config(
+            retries={"max_attempts": 5, "mode": "standard"},
+            s3={"addressing_style": "path"},
+        ),
     )
 
 
-def list_keys(client) -> list[str]:
+def list_keys_for_prefix(client, prefix: str) -> list[str]:
+    clean_prefix = prefix.strip("/")
+    request_prefix = f"{clean_prefix}/" if clean_prefix else ""
     paginator = client.get_paginator("list_objects_v2")
     keys: list[str] = []
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{S3_PREFIX}/"):
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=request_prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith("/"):
                 keys.append(key)
-    if not keys:
-        raise RuntimeError(f"Nessun file trovato in s3://{S3_BUCKET}/{S3_PREFIX}/")
+
     return keys
+
+
+def is_v4_key(key: str) -> bool:
+    segments = [normalized_segment(part) for part in PurePosixPath(key).parts[:-1]]
+    return any(segment in {"v4", "version4", "xmlv4", "feedv4"} for segment in segments)
+
+
+def list_keys(client) -> list[str]:
+    keys = list_keys_for_prefix(client, S3_PREFIX)
+    if keys:
+        print(f"Percorso S3 utilizzato: s3://{S3_BUCKET}/{S3_PREFIX}/")
+        return keys
+
+    base_prefix = S3_PREFIX.split("/", 1)[0] if S3_PREFIX else "EUR"
+    broader_keys = list_keys_for_prefix(client, base_prefix)
+
+    if not broader_keys:
+        broader_keys = list_keys_for_prefix(client, "")
+
+    if not broader_keys:
+        raise RuntimeError(
+            f"Nessun file visibile nel bucket s3://{S3_BUCKET}/. "
+            "Le credenziali sono state accettate, ma non risultano oggetti accessibili."
+        )
+
+    v4_keys = [key for key in broader_keys if is_v4_key(key)]
+    if v4_keys:
+        detected_roots = sorted(
+            {"/".join(PurePosixPath(key).parts[:-1]) for key in v4_keys}
+        )
+        print("Percorso V4 rilevato automaticamente:")
+        for root in detected_roots[:20]:
+            print(f"  - s3://{S3_BUCKET}/{root}/")
+        return v4_keys
+
+    sample = ", ".join(sorted(broader_keys)[:80])
+    raise RuntimeError(
+        "Nessuna cartella V4 riconosciuta. "
+        f"Primi file visibili nel bucket: {sample}"
+    )
 
 
 def select_key(keys: Iterable[str], logical_name: str) -> str:
     allowed = EXPECTED_STEMS[logical_name]
     matches = [key for key in keys if normalized_stem(key) in allowed]
+
     if not matches:
-        available = ", ".join(sorted(PurePosixPath(k).name for k in keys))
+        available = ", ".join(sorted(PurePosixPath(k).name for k in keys)[:100])
         raise RuntimeError(
-            f"File '{logical_name}' non trovato sotto {S3_PREFIX}. File disponibili: {available}"
+            f"File '{logical_name}' non trovato nel feed V4. "
+            f"File disponibili: {available}"
         )
+
     if len(matches) > 1:
-        xml_matches = [key for key in matches if PurePosixPath(key).suffix.lower() == ".xml"]
+        xml_matches = [
+            key for key in matches if PurePosixPath(key).suffix.lower() == ".xml"
+        ]
         if len(xml_matches) == 1:
             return xml_matches[0]
         raise RuntimeError(f"Più file compatibili per '{logical_name}': {matches}")
+
     return matches[0]
 
 
@@ -126,7 +182,10 @@ def upload_small(path: Path, destination: str, token: str) -> None:
 
 
 def upload_chunked(path: Path, destination: str, token: str) -> None:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/octet-stream",
+    }
     with path.open("rb") as handle:
         first = handle.read(CHUNK_SIZE)
         response = requests.post(
@@ -146,6 +205,7 @@ def upload_chunked(path: Path, destination: str, token: str) -> None:
             next_chunk = handle.read(CHUNK_SIZE)
             is_last = not next_chunk
             cursor = {"session_id": session_id, "offset": offset}
+
             if is_last:
                 response = requests.post(
                     SESSION_FINISH_URL,
@@ -168,11 +228,14 @@ def upload_chunked(path: Path, destination: str, token: str) -> None:
                 )
                 response.raise_for_status()
                 return
+
             response = requests.post(
                 SESSION_APPEND_URL,
                 headers={
                     **headers,
-                    "Dropbox-API-Arg": json.dumps({"cursor": cursor, "close": False}),
+                    "Dropbox-API-Arg": json.dumps(
+                        {"cursor": cursor, "close": False}
+                    ),
                 },
                 data=chunk,
                 timeout=600,
@@ -207,11 +270,16 @@ def sync(logical_names: list[str]) -> None:
         client.download_file(S3_BUCKET, key, str(local_path))
         validate_download(local_path)
         destination = upload_to_dropbox(local_path)
-        print(f"Caricato su Dropbox: {destination} ({local_path.stat().st_size} byte)")
+        print(
+            f"Caricato su Dropbox: {destination} "
+            f"({local_path.stat().st_size} byte)"
+        )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sincronizza feed XML Toppoint V4 verso Dropbox")
+    parser = argparse.ArgumentParser(
+        description="Sincronizza feed XML Toppoint V4 verso Dropbox"
+    )
     parser.add_argument(
         "mode",
         choices=("stock", "weekly", "all"),
