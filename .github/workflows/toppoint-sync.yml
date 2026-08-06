@@ -1,0 +1,69 @@
+name: Toppoint XML sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Feed da sincronizzare
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - stock
+          - weekly
+  schedule:
+    - cron: '30 4 * * *'   # stock ogni giorno, dopo l'aggiornamento Toppoint delle 03:30 CET
+    - cron: '0 5 * * 1'    # products, print e printprices ogni lunedì
+
+concurrency:
+  group: toppoint-xml-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  stock:
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'stock') || github.event.schedule == '30 4 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: toppoint/requirements.txt
+      - run: pip install -r toppoint/requirements.txt
+      - name: Download stock V4 and upload to Dropbox
+        env:
+          TOPPOINT_AWS_ACCESS_KEY_ID: ${{ secrets.TOPPOINT_AWS_ACCESS_KEY_ID }}
+          TOPPOINT_AWS_SECRET_ACCESS_KEY: ${{ secrets.TOPPOINT_AWS_SECRET_ACCESS_KEY }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_BASE_PATH_TOPPOINT: /Toppoint
+        run: python toppoint/sync_toppoint.py stock
+
+  weekly:
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'weekly') || github.event.schedule == '0 5 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: toppoint/requirements.txt
+      - run: pip install -r toppoint/requirements.txt
+      - name: Download weekly V4 feeds and upload to Dropbox
+        env:
+          TOPPOINT_AWS_ACCESS_KEY_ID: ${{ secrets.TOPPOINT_AWS_ACCESS_KEY_ID }}
+          TOPPOINT_AWS_SECRET_ACCESS_KEY: ${{ secrets.TOPPOINT_AWS_SECRET_ACCESS_KEY }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_BASE_PATH_TOPPOINT: /Toppoint
+        run: python toppoint/sync_toppoint.py weekly
