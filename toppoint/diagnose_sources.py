@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 
@@ -18,6 +18,13 @@ S3_ENDPOINT = os.getenv("TOPPOINT_S3_ENDPOINT", "https://s3-eu-north-1.amazonaws
 OUT_DIR = Path(os.getenv("TOPPOINT_DIAGNOSTIC_DIR", "out/toppoint-diagnostic"))
 SOURCE_DIR = OUT_DIR / "source"
 SCHEMA_DIR = OUT_DIR / "schema"
+
+SUPPORT_XML_NAMES = {
+    "productimages",
+    "productiontimes",
+    "productiontimesfl",
+    "productprices",
+}
 
 
 def local_name(tag: str) -> str:
@@ -81,6 +88,8 @@ def classify_key(key: str) -> set[str]:
         classes.add("printprices")
     if path.endswith(".xml") and "price" in canonical:
         classes.add("price_xml")
+    if path.endswith(".xml") and canonical in SUPPORT_XML_NAMES:
+        classes.add("support_xml")
     if path.endswith(".pdf") and "manual" in canonical:
         classes.add("manual")
     return classes
@@ -94,9 +103,10 @@ def unique_destination(key: str) -> Path:
 
 def download_selected(client, manifest: list[dict]) -> list[dict]:
     selected: list[dict] = []
+    wanted = {"v4_xml", "stock", "printprices", "support_xml"}
     for item in manifest:
         classes = classify_key(item["key"])
-        if not classes.intersection({"v4_xml", "stock", "printprices"}):
+        if not classes.intersection(wanted):
             continue
         destination = unique_destination(item["key"])
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +120,7 @@ def download_selected(client, manifest: list[dict]) -> list[dict]:
             }
         )
     if not selected:
-        raise RuntimeError("Nessun XML V4/stock/printprices selezionato")
+        raise RuntimeError("Nessun XML Toppoint selezionato")
     return selected
 
 
@@ -167,7 +177,7 @@ def schema_summary(path: Path) -> dict:
 def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[dict]) -> None:
     lines = [
         "TOPPOINT S3 DIAGNOSTIC",
-        f"Generated: {datetime.utcnow().isoformat()}Z",
+        f"Generated: {datetime.now(timezone.utc).isoformat()}",
         f"Bucket: {S3_BUCKET}",
         f"Prefix: {S3_PREFIX}",
         "",
