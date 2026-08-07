@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -11,6 +12,8 @@ import xml.etree.ElementTree as ET
 import boto3
 from botocore.config import Config
 
+from build_exports import build_from_source_root
+
 S3_BUCKET = os.getenv("TOPPOINT_S3_BUCKET", "toppoint-xml")
 S3_PREFIX = os.getenv("TOPPOINT_S3_BASE_PREFIX", "EUR").strip("/")
 S3_REGION = os.getenv("TOPPOINT_S3_REGION", "eu-north-1")
@@ -18,6 +21,7 @@ S3_ENDPOINT = os.getenv("TOPPOINT_S3_ENDPOINT", "https://s3-eu-north-1.amazonaws
 OUT_DIR = Path(os.getenv("TOPPOINT_DIAGNOSTIC_DIR", "out/toppoint-diagnostic"))
 SOURCE_DIR = OUT_DIR / "source"
 SCHEMA_DIR = OUT_DIR / "schema"
+EXPORT_DIR = OUT_DIR / "exports"
 
 SUPPORT_XML_NAMES = {
     "productimages",
@@ -146,9 +150,9 @@ def schema_summary(path: Path) -> dict:
         for attr_name in elem.attrib:
             attribute_counts[f"{current_path}/@{local_name(attr_name)}"] += 1
 
-        text = (elem.text or "").strip()
-        if text and len(samples[current_path]) < 5:
-            compact = re.sub(r"\s+", " ", text)
+        value = (elem.text or "").strip()
+        if value and len(samples[current_path]) < 5:
+            compact = re.sub(r"\s+", " ", value)
             samples[current_path].append(compact[:500])
 
         stack.pop()
@@ -160,11 +164,7 @@ def schema_summary(path: Path) -> dict:
         "root_tag": root_tag,
         "element_count": element_count,
         "paths": [
-            {
-                "path": key,
-                "count": count,
-                "samples": samples.get(key, []),
-            }
+            {"path": key, "count": count, "samples": samples.get(key, [])}
             for key, count in path_counts.most_common()
         ],
         "attributes": [
@@ -174,7 +174,7 @@ def schema_summary(path: Path) -> dict:
     }
 
 
-def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[dict]) -> None:
+def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[dict], exports: dict) -> None:
     lines = [
         "TOPPOINT S3 DIAGNOSTIC",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
@@ -189,7 +189,7 @@ def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[
 
     lines.extend(["", "DOWNLOADED FILES"])
     for item in selected:
-        lines.append(f"{item['size']:>12}  {item['key']}  ->  {item['local_path']}")
+        lines.append(f"{item['size']:>12}  {item['key']}")
 
     lines.extend(["", "XML ROOTS"])
     for schema in schemas:
@@ -198,18 +198,24 @@ def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[
             f"elements={schema['element_count']} size={schema['size']}"
         )
 
+    lines.extend([
+        "",
+        "GENERATED EXPORTS",
+        f"Products.csv: {exports['products']['rows']} rows, {exports['products']['columns']} columns",
+        f"DPO PRINT.csv: {exports['dpo_print']['rows']} rows",
+    ])
     (OUT_DIR / "diagnostic.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     SCHEMA_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     client = s3_client()
     manifest = list_objects(client)
     for item in manifest:
         item["classes"] = sorted(classify_key(item["key"]))
-
     (OUT_DIR / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -227,8 +233,12 @@ def main() -> int:
             json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    write_text_report(manifest, selected, schemas)
-    print(f"Diagnostic completato: {OUT_DIR}")
+    exports = build_from_source_root(SOURCE_DIR / "EUR", EXPORT_DIR)
+    write_text_report(manifest, selected, schemas, exports)
+
+    # Non includere i feed XML completi nell'artifact di un repository pubblico.
+    shutil.rmtree(SOURCE_DIR, ignore_errors=True)
+    print(f"Diagnostic + export preview completato: {OUT_DIR}")
     return 0
 
 
