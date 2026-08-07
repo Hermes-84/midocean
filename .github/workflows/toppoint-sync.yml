@@ -13,8 +13,8 @@ on:
           - stock
           - weekly
   schedule:
-    - cron: '30 4 * * *'   # stock ogni giorno, dopo l'aggiornamento Toppoint delle 03:30 CET
-    - cron: '0 5 * * 1'    # products, print e printprices ogni lunedì
+    - cron: '30 4 * * *'   # stock ogni giorno
+    - cron: '0 5 * * 1'    # Products + Print + DPO PRINT + printprices ogni lunedì
 
 concurrency:
   group: toppoint-xml-sync
@@ -36,7 +36,7 @@ jobs:
           cache: pip
           cache-dependency-path: toppoint/requirements.txt
       - run: pip install -r toppoint/requirements.txt
-      - name: Download stock V4 and upload to Dropbox
+      - name: Download stock and upload to Dropbox
         env:
           TOPPOINT_AWS_ACCESS_KEY_ID: ${{ secrets.TOPPOINT_AWS_ACCESS_KEY_ID }}
           TOPPOINT_AWS_SECRET_ACCESS_KEY: ${{ secrets.TOPPOINT_AWS_SECRET_ACCESS_KEY }}
@@ -44,7 +44,7 @@ jobs:
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
           DROPBOX_BASE_PATH_TOPPOINT: /Toppoint
-        run: python toppoint/sync_toppoint.py stock
+        run: python toppoint/sync_exports.py stock
 
   weekly:
     if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'weekly') || github.event.schedule == '0 5 * * 1'
@@ -58,7 +58,7 @@ jobs:
           cache: pip
           cache-dependency-path: toppoint/requirements.txt
       - run: pip install -r toppoint/requirements.txt
-      - name: Download weekly V4 feeds and upload to Dropbox
+      - name: Build V4 Products and DPO PRINT and upload weekly files
         env:
           TOPPOINT_AWS_ACCESS_KEY_ID: ${{ secrets.TOPPOINT_AWS_ACCESS_KEY_ID }}
           TOPPOINT_AWS_SECRET_ACCESS_KEY: ${{ secrets.TOPPOINT_AWS_SECRET_ACCESS_KEY }}
@@ -66,4 +66,4 @@ jobs:
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
           DROPBOX_BASE_PATH_TOPPOINT: /Toppoint
-        run: python toppoint/sync_toppoint.py weekly
+        run: python toppoint/sync_exports.py weekly
