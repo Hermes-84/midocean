@@ -1,0 +1,43 @@
+name: Toppoint clean export test
+
+on:
+  push:
+    branches:
+      - agent/toppoint-v4-enriched
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toppoint-clean-export-test
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: toppoint/requirements.txt
+
+      - run: pip install -r toppoint/requirements.txt
+
+      - name: Build clean exports from live Toppoint feeds
+        env:
+          TOPPOINT_AWS_ACCESS_KEY_ID: ${{ secrets.TOPPOINT_AWS_ACCESS_KEY_ID }}
+          TOPPOINT_AWS_SECRET_ACCESS_KEY: ${{ secrets.TOPPOINT_AWS_SECRET_ACCESS_KEY }}
+        run: python toppoint/diagnose_sources.py
+
+      - name: Upload clean preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toppoint-clean-export-preview
+          path: out/toppoint-diagnostic
+          if-no-files-found: error
+          retention-days: 3
