@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import boto3
 import requests
 from botocore.config import Config
 
-from build_exports import build_from_source_root
+from build_exports_clean import build_from_source_root
 
 S3_BUCKET = os.getenv("TOPPOINT_S3_BUCKET", "toppoint-xml")
 S3_REGION = os.getenv("TOPPOINT_S3_REGION", "eu-north-1")
@@ -26,6 +25,7 @@ SESSION_FINISH_URL = "https://content.dropboxapi.com/2/files/upload_session/fini
 CHUNK_SIZE = 8 * 1024 * 1024
 
 WEEKLY_SOURCES = [
+    # V4: primary source and all new attributes.
     "EUR/feed-v4/Products_v4.xml",
     "EUR/feed-v4/ProductTranslations_v4.xml",
     "EUR/feed-v4/ProductPrices_v4.xml",
@@ -33,6 +33,14 @@ WEEKLY_SOURCES = [
     "EUR/feed-v4/Categories_v4.xml",
     "EUR/feed-v4/Print_v4.xml",
     "EUR/feed-v4/PositionTranslations_v4.xml",
+    # V3: maintained exact fallback for legacy columns that V4 removed/renamed.
+    "EUR/feed-v3/Products_v3.xml",
+    "EUR/feed-v3/ProductTranslations_v3.xml",
+    "EUR/feed-v3/Print_v3.xml",
+    "EUR/feed-v3/PositionTranslations_v3.xml",
+    "EUR/feed-v3/colors.xml",
+    "EUR/feed-v3/categories.xml",
+    # Supplier support feeds.
     "EUR/product_images.xml",
     "EUR/ProductionTimes.xml",
     "EUR/printprices.xml",
