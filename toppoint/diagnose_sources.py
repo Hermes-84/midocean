@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import boto3
 from botocore.config import Config
 
-from build_exports import build_from_source_root
+from build_exports_clean import build_from_source_root
 
 S3_BUCKET = os.getenv("TOPPOINT_S3_BUCKET", "toppoint-xml")
 S3_PREFIX = os.getenv("TOPPOINT_S3_BASE_PREFIX", "EUR").strip("/")
@@ -193,6 +193,7 @@ def write_text_report(manifest, selected, schemas, exports) -> None:
         "GENERATED EXPORTS",
         f"Products.csv: {exports['products']['rows']} rows, {exports['products']['columns']} columns",
         f"DPO PRINT.csv: {exports['dpo_print']['rows']} rows",
+        f"Exact duplicate columns removed: {len(exports['products'].get('dropped_duplicate_columns', []))}",
     ])
     (OUT_DIR / "diagnostic.txt").write_text("\n".join(lines), encoding="utf-8")
 
