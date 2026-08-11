@@ -80,12 +80,13 @@ def list_objects(client) -> list[dict]:
 
 def classify_key(key: str) -> set[str]:
     path = key.lower()
-    name = PurePosixPath(key).name
-    canonical = canonical_name(name)
+    canonical = canonical_name(PurePosixPath(key).name)
     classes: set[str] = set()
 
     if path.endswith(".xml") and ("/feed-v4/" in path or canonical.endswith("v4")):
         classes.add("v4_xml")
+    if path.endswith(".xml") and "/feed-v3/" in path:
+        classes.add("v3_xml")
     if path.endswith(".xml") and re.fullmatch(r"stock(?:v\d+)?", canonical):
         classes.add("stock")
     if path.endswith(".xml") and "print" in canonical and "price" in canonical:
@@ -100,14 +101,16 @@ def classify_key(key: str) -> set[str]:
 
 
 def unique_destination(key: str) -> Path:
-    relative = PurePosixPath(key)
-    safe_parts = [re.sub(r"[^A-Za-z0-9._-]+", "_", part) for part in relative.parts]
+    safe_parts = [
+        re.sub(r"[^A-Za-z0-9._-]+", "_", part)
+        for part in PurePosixPath(key).parts
+    ]
     return SOURCE_DIR.joinpath(*safe_parts)
 
 
 def download_selected(client, manifest: list[dict]) -> list[dict]:
     selected: list[dict] = []
-    wanted = {"v4_xml", "stock", "printprices", "support_xml"}
+    wanted = {"v4_xml", "v3_xml", "stock", "printprices", "support_xml"}
     for item in manifest:
         classes = classify_key(item["key"])
         if not classes.intersection(wanted):
@@ -116,13 +119,7 @@ def download_selected(client, manifest: list[dict]) -> list[dict]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         print(f"Download s3://{S3_BUCKET}/{item['key']} -> {destination}")
         client.download_file(S3_BUCKET, item["key"], str(destination))
-        selected.append(
-            {
-                **item,
-                "classes": sorted(classes),
-                "local_path": str(destination),
-            }
-        )
+        selected.append({**item, "classes": sorted(classes), "local_path": str(destination)})
     if not selected:
         raise RuntimeError("Nessun XML Toppoint selezionato")
     return selected
@@ -143,18 +140,14 @@ def schema_summary(path: Path) -> dict:
                 root_tag = tag
             stack.append(tag)
             continue
-
         element_count += 1
         current_path = "/".join(stack)
         path_counts[current_path] += 1
         for attr_name in elem.attrib:
             attribute_counts[f"{current_path}/@{local_name(attr_name)}"] += 1
-
         value = (elem.text or "").strip()
-        if value and len(samples[current_path]) < 5:
-            compact = re.sub(r"\s+", " ", value)
-            samples[current_path].append(compact[:500])
-
+        if value and len(samples[current_path]) < 8:
+            samples[current_path].append(re.sub(r"\s+", " ", value)[:500])
         stack.pop()
         elem.clear()
 
@@ -174,7 +167,7 @@ def schema_summary(path: Path) -> dict:
     }
 
 
-def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[dict], exports: dict) -> None:
+def write_text_report(manifest, selected, schemas, exports) -> None:
     lines = [
         "TOPPOINT S3 DIAGNOSTIC",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
@@ -186,18 +179,15 @@ def write_text_report(manifest: list[dict], selected: list[dict], schemas: list[
     for item in sorted(manifest, key=lambda x: x["key"].lower()):
         classes = ",".join(sorted(classify_key(item["key"]))) or "-"
         lines.append(f"{item['size']:>12}  [{classes}]  {item['key']}")
-
     lines.extend(["", "DOWNLOADED FILES"])
     for item in selected:
         lines.append(f"{item['size']:>12}  {item['key']}")
-
     lines.extend(["", "XML ROOTS"])
     for schema in schemas:
         lines.append(
             f"{schema['file']}: root={schema['root_tag']} "
             f"elements={schema['element_count']} size={schema['size']}"
         )
-
     lines.extend([
         "",
         "GENERATED EXPORTS",
@@ -236,7 +226,7 @@ def main() -> int:
     exports = build_from_source_root(SOURCE_DIR / "EUR", EXPORT_DIR)
     write_text_report(manifest, selected, schemas, exports)
 
-    # Non includere i feed XML completi nell'artifact di un repository pubblico.
+    # I feed completi non devono finire nell'artifact del repository pubblico.
     shutil.rmtree(SOURCE_DIR, ignore_errors=True)
     print(f"Diagnostic + export preview completato: {OUT_DIR}")
     return 0
