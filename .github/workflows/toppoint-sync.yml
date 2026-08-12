@@ -12,9 +12,12 @@ on:
           - all
           - stock
           - weekly
+  push:
+    branches:
+      - main
   schedule:
-    - cron: '30 4 * * *'   # stock ogni giorno
-    - cron: '0 5 * * 1'    # Products + Print + DPO PRINT + printprices ogni lunedì
+    - cron: '30 4,16 * * *'   # stock ogni 12 ore
+    - cron: '0 5 * * 3'       # Products + Print + DPO PRINT + printprices ogni mercoledì
 
 concurrency:
   group: toppoint-xml-sync
@@ -25,7 +28,7 @@ permissions:
 
 jobs:
   stock:
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'stock') || github.event.schedule == '30 4 * * *'
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'stock') || github.event.schedule == '30 4,16 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,7 +50,7 @@ jobs:
         run: python toppoint/sync_exports.py stock
 
   weekly:
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'weekly') || github.event.schedule == '0 5 * * 1'
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'weekly') || github.event.schedule == '0 5 * * 3' || github.event_name == 'push' && contains(github.event.head_commit.message, '[toppoint-run-now]')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
